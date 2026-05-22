@@ -1,0 +1,118 @@
+# ==========================================
+# 1. HELFER (Dummys, Timer & Flags)
+# ==========================================
+timer:
+  coffee_tx_cooldown:
+    duration: "00:00:30"
+    name: "Coffee TX Cooldown"
+
+input_boolean:
+  coffee_update_pending:
+    name: "Coffee Update Pending"
+    initial: false
+
+  # --- DUMMY KANNE 2 ---
+  kanne2_conn:
+    name: "Kanne 2: Disconnect"
+  kanne2_batt:
+    name: "Kanne 2: Akku leer"
+
+input_number:
+  kanne2_temp:
+    name: "Kanne 2: Temperatur"
+    min: 0
+    max: 100
+    step: 1
+  kanne2_fill:
+    name: "Kanne 2: Füllstand"
+    min: 0
+    max: 6
+    step: 1
+
+input_select:
+  kanne2_state:
+    name: "Kanne 2: Status"
+    options:
+      - "0"
+      - "1"
+      - "2"
+      - "3"
+
+# ==========================================
+# 2. SHELL BEFEHL
+# ==========================================
+shell_command:
+  send_coffee_data: >
+    sh -c "stty -F /dev/ttyACM0 115200 && echo '{{ payload }}' > /dev/ttyACM0"
+
+# ==========================================
+# 3. DAS ZENTRALE SENDE-SKRIPT (DRY-Prinzip)
+# ==========================================
+script:
+  coffee_transmit:
+    alias: "Sende Daten an Pico"
+    sequence:
+      - service: shell_command.send_coffee_data
+        data:
+          payload: >-
+            {{ now().strftime('%H:%M %d.%m.%Y') }} 4 {{ states('input_number.kanne1_fill') | int(1) }} {{ 1 if is_state('input_boolean.kanne1_batt', 'on') else 0 }} {{ states('input_select.kanne1_state') | int(0) }} {{ 1 if is_state('input_boolean.kanne1_conn', 'on') else 0 }} {{ states('input_number.kanne1_temp') | int(11) }} {{ states('input_number.kanne2_fill') | int(2) }} {{ 1 if is_state('input_boolean.kanne2_batt', 'on') else 1 }} {{ states('input_select.kanne2_state') | int(1) }} {{ 1 if is_state('input_boolean.kanne2_conn', 'on') else 0 }} {{ states('input_number.kanne2_temp') | int(22) }} {{ states('input_number.kanne3_fill') | int(3) }} {{ 1 if is_state('input_boolean.kanne3_batt', 'on') else 0 }} {{ states('input_select.kanne3_state') | int(2) }} {{ 1 if is_state('input_boolean.kanne3_conn', 'on') else 1 }} {{ states('input_number.kanne3_temp') | int(33) }} {{ states('input_number.kanne4_fill') | int(4) }} {{ 1 if is_state('input_boolean.kanne4_batt', 'on') else 1 }} {{ states('input_select.kanne4_state') | int(3) }} {{ 1 if is_state('input_boolean.kanne4_conn', 'on') else 1 }} {{ states('input_number.kanne4_temp') | int(44) }}
+
+# ==========================================
+# 4. DIE ZUSTANDSAUTOMATEN (Automationen)
+# ==========================================
+automation:
+  # Trigger 1: Ein Sensor ODER die Uhrzeit (alle 5 Min) ändert sich
+  - alias: "Coffee: Sensor oder Zeit geändert"
+    mode: queued
+    trigger:
+      # A) Wenn sich an den Kannen etwas tut
+      - platform: state
+        entity_id:
+          - input_number.kanne2_temp
+          - input_number.kanne2_fill
+          - input_boolean.kanne2_conn
+          - input_boolean.kanne2_batt
+          - input_select.kanne2_state
+          
+      # B) Jede Minute, die durch 5 teilbar ist (00, 05, 10, 15 ... 55)
+      - platform: time_pattern
+        minutes: "/5"
+        
+    action:
+      - if:
+          # Wenn der 30-Sekunden-Timer steht (Leerlauf), sofort senden und Timer starten
+          - condition: state
+            entity_id: timer.coffee_tx_cooldown
+            state: "idle"
+        then:
+          - service: script.coffee_transmit
+          - service: timer.start
+            target:
+              entity_id: timer.coffee_tx_cooldown
+        else:
+          # Wenn wir in der 30s-Sperrzeit sind, nur das Pending-Flag setzen
+          - service: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.coffee_update_pending
+
+  # Trigger 2: Der 30-Sekunden-Timer läuft ab
+  - alias: "Coffee: Cooldown beendet"
+    mode: single
+    trigger:
+      - platform: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.coffee_tx_cooldown
+    condition:
+      # Nur ausführen, wenn in den 30 Sekunden ein Sensor ODER die Zeit getriggert hat
+      - condition: state
+        entity_id: input_boolean.coffee_update_pending
+        state: "on"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.coffee_update_pending
+      - service: script.coffee_transmit
+      - service: timer.start
+        target:
+          entity_id: timer.coffee_tx_cooldown
