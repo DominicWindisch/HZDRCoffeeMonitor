@@ -156,6 +156,8 @@ def draw_tile(tile_x, tile_y, pot):
         text_writer.printstring("Offline")
     elif pot['fill'] == 0:
         text_writer.printstring("Leer")
+    elif pot['is_brewing'] == 1:
+        text_writer.printstring("Kocht...")
     else:
         if pot['age_mins'] == 0:
             text_writer.printstring("Gerade eben")
