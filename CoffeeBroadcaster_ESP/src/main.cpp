@@ -3,22 +3,24 @@
 #include <BLEUtils.h>
 #include <BLEAdvertising.h>
 
-// Struktur für eine Kanne (16 Bit)
+// Neue "Flat-16" API Struktur für eine Kanne
 struct PotData
 {
-    uint8_t fill;    // 3 Bit
-    uint8_t battery; // 1 Bit
-    uint8_t state;   // 2 Bit
-    uint8_t conn;    // 1 Bit
-    uint8_t temp;    // 7 Bit
+    uint8_t fill;        // 3 Bit (0-6)
+    uint8_t batt;        // 1 Bit (0=OK, 1=Low)
+    uint8_t conn;        // 1 Bit (0=Verbunden, 1=Offline)
+    uint8_t is_brewing;  // 1 Bit (0=Normal, 1=Kocht)
+    uint8_t steam_level; // 2 Bit (0=Kalt, 1-3 Schwaden)
+    uint8_t age_mins;    // 8 Bit (0-255 Minuten)
 
     uint16_t pack()
     {
         return (fill & 0x07) |
-               ((battery & 0x01) << 3) |
-               ((state & 0x03) << 4) |
-               ((conn & 0x01) << 6) |
-               ((temp & 0x7F) << 7);
+               ((batt & 0x01) << 3) |
+               ((conn & 0x01) << 4) |
+               ((is_brewing & 0x01) << 5) |
+               ((steam_level & 0x03) << 6) |
+               ((age_mins & 0xFF) << 8);
     }
 };
 
@@ -41,37 +43,40 @@ void setup()
     pAdvertising = BLEDevice::getAdvertising();
 
     Serial.println("Warte auf serielle Daten...");
-    Serial.println("Format z.B.: 08:30 22.05.2026 4  6 0 0 0 82  4 0 0 0 75  1 0 3 1 35  0 0 0 0 20");
+    Serial.println("Erwartetes Format (30 Tokens): 08:30 22.05.2026 4  [fill batt conn is_brewing steam age_mins] ...");
 }
 
 void parseAndBroadcast(String input)
 {
-    char buf[128];
+    // Puffer vergrößert für längeren String
+    char buf[256]; 
     input.toCharArray(buf, sizeof(buf));
 
     const char *delimiters = " :.,;";
     char *token = strtok(buf, delimiters);
-    int tokens[30];
+    
+    // Array vergrößert, da wir jetzt 30 Tokens (6 Header + 4x6 Kannen) erwarten
+    int tokens[35]; 
     int tokenCount = 0;
 
-    while (token != NULL && tokenCount < 30)
+    while (token != NULL && tokenCount < 35)
     {
         tokens[tokenCount++] = atoi(token);
         token = strtok(NULL, delimiters);
     }
 
-    if (tokenCount < 26)
+    if (tokenCount < 30)
     {
-        Serial.printf("Fehler: Zu wenige Parameter! (Erhalten: %d)\n", tokenCount);
+        Serial.printf("Fehler: Zu wenige Parameter! (Erhalten: %d, Erwartet: 30)\n", tokenCount);
         return;
     }
 
     // --- 17-Byte Payload zusammenbauen ---
     uint8_t payload[17];
 
-    // Header (0x3412)
-    payload[0] = 0x34;
-    payload[1] = 0x12;
+    // Exklusiver Header (0xCAFE in Little Endian -> FE CA)
+    payload[0] = 0xFE;
+    payload[1] = 0xCA;
 
     // Zeit & Datum
     payload[2] = tokens[0]; // Stunden
@@ -80,9 +85,9 @@ void parseAndBroadcast(String input)
     payload[5] = tokens[3]; // Monat
 
     // Jahr als 16-Bit Integer (Bytes 6 und 7)
-    uint16_t year = tokens[4];       // 2026
-    payload[6] = year & 0xFF;        // Low Byte (0xEA)
-    payload[7] = (year >> 8) & 0xFF; // High Byte (0x07)
+    uint16_t year = tokens[4];       
+    payload[6] = year & 0xFF;        // Low Byte 
+    payload[7] = (year >> 8) & 0xFF; // High Byte 
 
     payload[8] = tokens[5]; // N (Anzahl der Kannen)
 
@@ -92,15 +97,16 @@ void parseAndBroadcast(String input)
 
     for (int i = 0; i < 4; i++)
     {
-        pots[i].fill = tokens[offset++];
-        pots[i].battery = tokens[offset++];
-        pots[i].state = tokens[offset++];
-        pots[i].conn = tokens[offset++];
-        pots[i].temp = tokens[offset++];
+        pots[i].fill        = tokens[offset++];
+        pots[i].batt        = tokens[offset++];
+        pots[i].conn        = tokens[offset++];
+        pots[i].is_brewing  = tokens[offset++];
+        pots[i].steam_level = tokens[offset++];
+        pots[i].age_mins    = tokens[offset++];
 
         uint16_t val = pots[i].pack();
-        payload[9 + i * 2] = val & 0xFF;            // Low Byte
-        payload[9 + i * 2 + 1] = (val >> 8) & 0xFF; // High Byte
+        payload[9 + i * 2]     = val & 0xFF;            // Low Byte
+        payload[9 + i * 2 + 1] = (val >> 8) & 0xFF;     // High Byte
     }
 
     // --- BLE Paket senden ---
