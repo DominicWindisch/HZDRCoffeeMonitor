@@ -52,7 +52,7 @@ void sendBTHomePacket(float temp, float volt, uint8_t battery, uint64_t mass, bo
   payload += (char)((v_val >> 8) & 0xFF);
 
   uint32_t mass32 = (uint32_t)mass;
-  payload += (char)0x3D;
+  payload += (char)0x3E;
   payload += (char)(mass32 & 0xFF);
   payload += (char)((mass32 >> 8) & 0xFF);
   payload += (char)((mass32 >> 16) & 0xFF);
@@ -84,7 +84,7 @@ bool performMeasurementAndSend() {
   uint32_t startWait = millis();
   while (millis() - startWait < 1000) {
     if (scale.is_ready()) {
-      mass = scale.read() + 1000000;
+      mass = scale.read_average(5);
       break;
     }
     delay(5);
@@ -130,6 +130,30 @@ bool performMeasurementAndSend() {
 }
 
 void setup() {
+  // =========================================================================
+  // NOTLAUF-PRÜFUNG (Direkt als allererste Aktion, BEVOR Serial oder BLE starten!)
+  // =========================================================================
+  pinMode(IO_Voltage, INPUT);
+  
+  // Kurze Beruhigungspause für den ADC-Konverter (5ms)
+  delay(5); 
+  
+  uint32_t raw_volt = 0;
+  for (int i = 0; i < 8; i++) {
+    raw_volt += analogReadMilliVolts(IO_Voltage);
+  }
+  float volt = ((raw_volt / 8) * 2) / 1000.0;
+
+  // Wenn die Spannung unter 3.3V fällt, gehen wir in den extremen Stromsparmodus.
+  // Die 2.0V-Untergrenze verhindert Fehlmessungen, falls gar keine Batterie dran hängt.
+  if (volt < 3.3 && volt > 2.0) {
+    // Wir funken nicht, wir schreiben nichts auf Serial. 
+    // Wir legen uns sofort wieder für 5 Minuten schlafen (300 Sekunden).
+    uint64_t emergency_sleep_us = 300000000ULL; 
+    esp_sleep_enable_timer_wakeup(emergency_sleep_us);
+    esp_deep_sleep_start();
+  }
+  // =========================================================================
   Serial.begin(115200);
 
   uint32_t t = millis();
