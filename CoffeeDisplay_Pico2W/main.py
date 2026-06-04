@@ -22,6 +22,7 @@ epd = epd_v2.EPD_7in5_B()
 # --- HARDWARE BUTTON (Für Test-Refreshes) ---
 btn0 = machine.Pin(2, machine.Pin.IN, machine.Pin.PULL_UP)
 manual_refresh_requested = False
+is_sleeping = False
 
 def btn_callback(pin):
     global manual_refresh_requested
@@ -269,9 +270,9 @@ def do_full_refresh():
 
 def do_partial_refresh():
     print("=> Starte PARTIAL REFRESH...")
-    for i in range(2):
+    for i in range(3):
         epd.display_Partial(epd.buffer_black, 0, 0, 800, 480)
-        time.sleep(0.15)
+        time.sleep(1)
 
 # ==========================================
 # APPLIKATIONS-SCHLEIFE
@@ -295,23 +296,32 @@ try:
             last_minute_tick = current_time_ms 
             
             print("\n--- NEUES BLE PAKET EMPFANGEN ---")
+            print(f"raw: {new_ble_data}")
             
             if len(new_ble_data) < 15:
                 print("FEHLER: Paket zu kurz!")
                 continue
 
-            # --- PARSING ---
-            current_hour  = new_ble_data[0]
-            current_min   = new_ble_data[1]
-            current_day   = new_ble_data[2]
-            current_month = new_ble_data[3]
-            current_year  = struct.unpack('<H', new_ble_data[4:6])[0]
+            # --- 1. PARSING IN TEMPORÄRE VARIABLEN ---
+            temp_hour  = new_ble_data[0]
+            temp_min   = new_ble_data[1]
+            temp_day   = new_ble_data[2]
+            temp_month = new_ble_data[3]
+            temp_year  = struct.unpack('<H', new_ble_data[4:6])[0]
 
-            # --- 1. SANITY CHECK: ZEIT & DATUM ---
-            if not (0 <= current_hour <= 23) or not (0 <= current_min <= 59) or \
-               not (1 <= current_day <= 31) or not (1 <= current_month <= 12) or \
-               not (2024 <= current_year <= 2100):
+            # --- 2. SANITY CHECK: ZEIT & DATUM ---
+            if not (0 <= temp_hour <= 23) or not (0 <= temp_min <= 59) or \
+               not (1 <= temp_day <= 31) or not (1 <= temp_month <= 12) or \
+               not (2024 <= temp_year <= 2100):
+                print(f"FEHLER: Unplausible Zeit empfangen ({temp_hour}:{temp_min} {temp_day}.{temp_month}.{temp_year}). Paket verworfen!")
                 continue
+
+            # --- 3. DATEN SIND SICHER: GLOBAL ÜBERNEHMEN ---
+            current_hour  = temp_hour
+            current_min   = temp_min
+            current_day   = temp_day
+            current_month = temp_month
+            current_year  = temp_year
 
             time_str = f"{current_hour:02d} {current_min:02d}"
             date_str = f"{current_day:02d}.{current_month:02d}.{current_year}"
@@ -381,6 +391,31 @@ try:
             
             time_str = f"{current_hour:02d} {current_min:02d}"
             date_str = f"{current_day:02d}.{current_month:02d}.{current_year}"
+
+            if current_hour >= 20 or current_hour < 6:
+                if not is_sleeping:
+                    print("Gehe in den Nachtschlaf...")
+                    epd.init()
+                    # Ein letztes Mal Full-Refresh, damit das Bild nachts sauber steht
+                    draw_header(time_str, date_str)
+                    update_display(coffee_pots_data)
+                    do_full_refresh()
+                    epd.sleep() # Jetzt ist physikalisch der Strom weg!
+                    is_sleeping = True
+                
+                # In der Nacht machen wir KEINE Updates mehr. 
+                # Die Schleife läuft weiter, aber das Display bleibt aus.
+                continue
+
+            if is_sleeping:
+                print("Guten Morgen! Wache auf...")
+                epd.init()
+                # ZWINGEND ein Full Refresh nach dem Sleep (SRAM füllen!)
+                draw_header(time_str, date_str)
+                update_display(coffee_pots_data)
+                do_full_refresh()
+                is_sleeping = False
+                continue
             
             # --- RENDER ENTSCHEIDUNG ---
             if current_min % 30 == 0 and last_full_refresh != current_min:

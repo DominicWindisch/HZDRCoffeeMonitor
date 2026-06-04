@@ -4,12 +4,16 @@
 
 // --- PIN-BELEGUNG ---
 #define TC1047_PWR D1
+#define TC1047_GND D3
 #define TC1047_Analog A0
-#define HX711_GND D10
-#define HX711_DATA D9
+
+#define HX711_PWR D10
+#define HX711_GND D9
 #define HX711_CLK D8
-#define HX711_PWR D7
+#define HX711_DATA D7
+
 #define IO_Voltage A2
+
 
 // --- ZEITEN ---
 #define SLEEP_TIME_BATTERY_US 15000000ULL // 15 Sekunden Deep Sleep
@@ -74,9 +78,7 @@ void sendBTHomePacket(float temp, float volt, uint8_t battery, uint64_t mass, bo
 // Führt exakt EINEN kompletten Mess-Zyklus durch
 bool performMeasurementAndSend() {
   // 1. SENSOREN BESTROMEN
-  digitalWrite(TC1047_PWR, HIGH);
-  digitalWrite(HX711_GND, LOW);
-  digitalWrite(HX711_PWR, HIGH);
+
 
   // 2. WAAGE LESEN
   scale.power_up();
@@ -146,7 +148,7 @@ void setup() {
 
   // Wenn die Spannung unter 3.3V fällt, gehen wir in den extremen Stromsparmodus.
   // Die 2.0V-Untergrenze verhindert Fehlmessungen, falls gar keine Batterie dran hängt.
-  if (volt < 3.3 && volt > 2.0) {
+  if (volt < 3.4 && volt > 2.0) {
     // Wir funken nicht, wir schreiben nichts auf Serial. 
     // Wir legen uns sofort wieder für 5 Minuten schlafen (300 Sekunden).
     uint64_t emergency_sleep_us = 300000000ULL; 
@@ -165,8 +167,22 @@ void setup() {
 
   // GPIOs initialisieren
   pinMode(TC1047_PWR, OUTPUT);
-  pinMode(HX711_GND, OUTPUT);
+  pinMode(TC1047_GND, OUTPUT);  
+  digitalWrite(TC1047_PWR, HIGH);
+  digitalWrite(TC1047_GND, LOW);  
+  gpio_hold_en((gpio_num_t)TC1047_PWR);
+  gpio_hold_en((gpio_num_t)TC1047_GND);
+
   pinMode(HX711_PWR, OUTPUT);
+  pinMode(HX711_GND, OUTPUT);
+  digitalWrite(HX711_PWR, HIGH);
+  digitalWrite(HX711_GND, LOW);
+  gpio_hold_en((gpio_num_t)HX711_PWR);
+  gpio_hold_en((gpio_num_t)HX711_GND);
+
+  gpio_deep_sleep_hold_en();
+
+    delay(10); 
   scale.begin(HX711_DATA, HX711_CLK);
 
   // Erste Messung durchführen
